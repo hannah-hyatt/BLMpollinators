@@ -3,14 +3,12 @@
 ##Originally written by M Tarjanand edited by Ellie Linden. 
 ##December 2022 - edited by Hannah Hyatt for BLM Pollinators project
 
-# Note from Ellie: For now, I think its fine to leave default settings for the "quantile" function, since we're currently running this analysis for Healy's communications.
-# If we were to run an analysis in the future to be used in a publication, go back and understand the options for the "type" parameter within the "quantile" function.
-
 ##define thresholds
-thresholds<-c(0.99, 0.95, 0.9, 0.75)
+thresholds<-c(0.95)
 
 ##define output workspace
 outWS <- "S:/Projects/BLM/BLM_Pollinators/Data/Intermediate/Modeling/ThresholdingModels_outputs/"
+springWS <- "S:/Projects/BLM/BLM_Pollinators/Data/Intermediate/Modeling/SpringModelThreshold_int/"
 
 ##install packages if you don't have them yet (only do this once per machine)
 #install.packages("Rcpp")
@@ -31,22 +29,18 @@ overwrite=TRUE
 
 ##Load monarch model raster layer
 fallmonarch.raster<-raster::raster("S:/Projects/BLM/BLM_Pollinators/Data/Source/Unzipped/ModelingData/ModelMigration/Dplex_Fallv3_118751_rf_20220926_continuous.tif")
-#springmonarch.raster<-raster::raster("G:/hannah/Thresholds/InputData/RSR_All.tif")
 
 ##load state boundaries
 fieldoffices<-sf::st_read("S:/Projects/BLM/BLM_Pollinators/Data/Intermediate/BLM_Administrative_Units/BLM_FIeldOffice_Distrcits_merge_CONUS_albs2.shp")
-#fieldoffices<-rgdal::readOGR(dsn = "G:/hannah/ReferenceLayers/US_Boundaries", layer= "tl_2017_us_state_prj_select_lower48_select")
 
 ##check projections of two layers. if needed, convert state coordinate system/projection to MoBI product coordinate system/projection
 proj4string(fallmonarch.raster); proj4string(fieldoffices)
-#fieldoffices.proj <- spTransform(fieldoffices, CRS("+init=epsg:3157")) # reproject
-#proj4string(fieldoffices.proj)
 
 ##check that raster and state files align visually
 plot(fallmonarch.raster); plot(fieldoffices, add=T)
 
 ##create a percentile raster for CONUS
-fallmonarch.percentile<-quantile(fallmonarch.raster, probs=thresholds) ##see ?quantile to understand different options for how to calulate percentiles by setting type== and integer
+fallmonarch.percentile<-quantile(fallmonarch.raster, probs=thresholds) 
 plot(fallmonarch.percentile)
 
 ##reclassify raster values based on percentile
@@ -58,17 +52,67 @@ plot(fallmonarch.percentile.raster)
 
 ##write out the resulting raster as tif
 writeRaster(fallmonarch.percentile.raster, str_c(outWS, "fallmonarch_clipped.tif"), format="GTiff")
-#writeRaster(mobi.percentile.raster, "Output/MoBI.product.percentiles.asc", format="ascii")
 
 ##Create a raster for each fieldoffice
-for (j in 1:length(fieldoffices$ADMU_NAME)) { #for each field office
+for (j in 1:length(fieldoffices$FO_Name)) { #for each field office
   ##select the relevant field office
-  fieldoffices.temp<-fieldoffices$ADMU_NAME[j]
-  fieldoffices.shp.temp<-subset(fieldoffices, ADMU_NAME==fieldoffices.temp)
+  fieldoffices.temp<-fieldoffices$FO_Name[j]
+  fieldoffices.shp.temp<-subset(fieldoffices, FO_Name==fieldoffices.temp)
   ##clip the raster
   ## crop and mask
   r2 <- crop(fallmonarch.raster, fieldoffices.shp.temp)
   r3 <- mask(r2, fieldoffices.shp.temp)
+  ##skip to next fieldoffice if value is 0
+  if(maxValue(r3)==0){next}
+  ##find percentile cutoff values
+  r3.percentile<-quantile(r3, probs=thresholds) 
+  ##reclassify the raster based on the cutoffs
+  reclass<-cbind(from=c(r3.percentile, 0), to=c(cellStats(r3, stat='max'), r3.percentile), percentile=c(thresholds,NA))
+  r3.percentile.raster<-reclassify(x = r3, rcl = reclass, include.lowest=T)
+  plot(r3.percentile.raster)
+  
+  ##write out the raster
+  writeRaster(r3.percentile.raster, str_c(outWS, "Monarch_percentiles_",fieldoffices.temp,".tif"), format="GTiff", overwrite=T)
+}
+
+##-----------------------------------------------------------------
+## Repeat for the spring model
+
+##Load spring monarch model raster layer
+springmonarch.raster<-raster::raster("S:/Projects/BLM/BLM_Pollinators/Data/Source/Unzipped/ModelingData/Models_2023/spring_mosaic_maxV4_1.tif")
+
+##load Field Office boundaries
+fieldoffices2<-sf::st_read("S:/Projects/BLM/BLM_Pollinators/Data/Intermediate/BLM_Administrative_Units/BLM_FO_SpringMonarch.shp")
+
+##check projections of two layers. if needed, convert state coordinate system/projection to MoBI product coordinate system/projection
+proj4string(springmonarch.raster); proj4string(fieldoffices2)
+
+##check that raster and Field Office files align visually
+plot(springmonarch.raster); plot(fieldoffices2, add=T)
+
+##create a percentile raster for CONUS
+springmonarch.percentile<-quantile(springmonarch.raster, probs=thresholds) 
+plot(springmonarch.percentile)
+
+##reclassify raster values based on percentile
+##reclassification data.frame
+reclass<-cbind(from=c(springmonarch.percentile, 0), to=c(cellStats(springmonarch.raster, stat='max'), springmonarch.percentile), percentile=c(thresholds,NA))
+
+springmonarch.percentile.raster<-reclassify(x = springmonarch.raster, rcl = reclass, include.lowest=T)
+plot(springmonarch.percentile.raster)
+
+##write out the resulting raster as tif
+writeRaster(springmonarch.percentile.raster, str_c(springWS, "springmonarch_thresholded.tif"), datatype='INT4U', format="GTiff", overwrite=T)
+
+##Create a raster for each fieldoffice
+for (j in 1:length(fieldoffices2$FO_Name)) { #for each field office
+  ##select the relevant field office
+  fieldoffices2.temp<-fieldoffices2$FO_Name[j]
+  fieldoffices2.shp.temp<-subset(fieldoffices2, FO_Name==fieldoffices2.temp)
+  ##clip the raster
+  ## crop and mask
+  r2 <- crop(springmonarch.raster, fieldoffices2.shp.temp)
+  r3 <- mask(r2, fieldoffices2.shp.temp)
   ##skip to next fieldoffice if value is 0
   if(maxValue(r3)==0){next}
   ##find percentile cutoff values
@@ -79,5 +123,5 @@ for (j in 1:length(fieldoffices$ADMU_NAME)) { #for each field office
   plot(r3.percentile.raster)
   
   ##write out the raster
-  writeRaster(r3.percentile.raster, str_c(outWS, "Monarch_percentiles_",fieldoffices.temp,".tif"), format="GTiff", overwrite=T)
+  writeRaster(r3.percentile.raster, str_c(springWS, "SpringMonarch_percentiles_",fieldoffices2.temp,".tif"), format="GTiff", datatype='INT4U', overwrite=T)
 }
